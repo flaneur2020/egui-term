@@ -60,6 +60,7 @@ pub fn run_with(
     let ctx = egui::Context::default();
     let mut state = State::new(ctx.clone(), cols, rows, options.state);
     let mut renderer = OffscreenRenderer::new()?;
+    let mut presenter = kitty::KittyPresenter::default();
 
     let mut needs_repaint = true;
     let mut next_repaint_at = Instant::now();
@@ -106,7 +107,7 @@ pub fn run_with(
         if width > 0 && height > 0 {
             let frame_rgba =
                 renderer.render(&ctx, &output, width, height, state.pixels_per_point())?;
-            kitty::write_frame(&mut stdout, &frame_rgba, screen_cols, screen_rows)?;
+            presenter.present(&mut stdout, &frame_rgba, screen_cols, screen_rows)?;
             stdout.flush()?;
         }
 
@@ -119,6 +120,9 @@ pub fn run_with(
         next_repaint_at = Instant::now() + repaint_delay;
         needs_repaint = repaint_delay.is_zero();
     }
+
+    presenter.clear(&mut stdout)?;
+    stdout.flush()?;
 
     Ok(())
 }
