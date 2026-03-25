@@ -1,0 +1,22 @@
+[package]
+name = "egui-term"
+version = "0.1.0"
+edition = "2021"
+description = "Terminal integration for egui using kitty graphics protocol"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yazhou/egui-term"
+
+[dependencies]
+base64 = "0.22"
+crossterm = "0.29"
+egui = "0.33.3"
+egui-wgpu = "0.33.3"
+pollster = "0.4"
+thiserror = "1.0"
+
+[dev-dependencies]
+anyhow = "1.0"
+
+[[example]]
+name = "demo"
+path = "examples/demo/src/main.rs"
