@@ -112,12 +112,35 @@ buf = bytearray()
 start = time.monotonic()
 timeout_sec = 25.0
 
-def send_mouse_click(col: int, row: int) -> None:
-    # SGR mouse: press(M) and release(m), coordinates are 1-based.
-    down = f"\x1b[<0;{col};{row}M".encode()
-    up = f"\x1b[<0;{col};{row}m".encode()
-    os.write(master_fd, down)
-    os.write(master_fd, up)
+CLICK_SENTINEL = b"[[AUTOTEST_CLICK=1]]"
+
+def send_mouse_down(col: int, row: int) -> None:
+    os.write(master_fd, f"\x1b[<0;{col};{row}M".encode())
+
+def send_mouse_up(col: int, row: int) -> None:
+    os.write(master_fd, f"\x1b[<0;{col};{row}m".encode())
+
+def send_mouse_click(col: int, row: int, hold_sec: float = 0.12) -> None:
+    send_mouse_down(col, row)
+    time.sleep(hold_sec)
+    send_mouse_up(col, row)
+
+def replay_click_activity() -> None:
+    # Replay a robust variant of recorded manual activity:
+    # frequent clicks around (3,3)/(6,3) with occasional row+1 probing.
+    #
+    # In this pseudo-tty harness crossterm reports mouse col/row one-less than
+    # encoded SGR values, so these are intentionally shifted by +1.
+    attempts = [
+        (4, 4),  # -> (3,3)
+        (7, 4),  # -> (6,3)
+        (8, 4),  # -> (7,3)
+        (7, 5),  # -> (6,4)
+        (6, 4),  # -> (5,3)
+    ]
+    for (col, row) in attempts:
+        send_mouse_click(col, row)
+        time.sleep(0.1)
 
 try:
     sent = False
@@ -132,10 +155,7 @@ try:
             sys.exit(124)
 
         if not sent and now - start > 0.8:
-            # Try mouse click near the top-left where the first button is expected.
-            for (col, row) in [(3, 3), (5, 3), (7, 3), (9, 3), (6, 4)]:
-                send_mouse_click(col, row)
-                time.sleep(0.05)
+            replay_click_activity()
             sent = True
 
         rlist, _, _ = select.select([master_fd], [], [], 0.1)
@@ -166,8 +186,8 @@ with open(log_path, "wb") as f:
 sys.exit(proc.returncode)
 PY
 
-if ! LC_ALL=C grep -aq "AUTOTEST_CLICK=1" "$INTERACTION_LOG_FILE"; then
-  echo "[integration] error: interaction check failed, no AUTOTEST_CLICK=1 found" >&2
+if ! LC_ALL=C grep -aq "\\[\\[AUTOTEST_CLICK=1\\]\\]" "$INTERACTION_LOG_FILE"; then
+  echo "[integration] error: interaction check failed, no [[AUTOTEST_CLICK=1]] found" >&2
   exit 1
 fi
 

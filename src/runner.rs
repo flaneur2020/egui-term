@@ -14,6 +14,10 @@ use crossterm::{
 
 use crate::{debug_log, kitty, OffscreenRenderer, Result, State, StateOptions};
 
+const INTERACTIVE_FRAME_INTERVAL: Duration = Duration::from_millis(16);
+const IDLE_FRAME_INTERVAL: Duration = Duration::from_millis(66);
+const INTERACTIVE_WINDOW: Duration = Duration::from_millis(250);
+
 #[derive(Clone, Copy, Debug)]
 pub struct RunOptions {
     pub state: StateOptions,
@@ -72,13 +76,16 @@ pub fn run_with(
 
     let mut needs_repaint = true;
     let mut next_repaint_at = Instant::now();
+    let mut earliest_render_at = Instant::now();
+    let mut last_interaction_at: Option<Instant> = None;
     let mut frame_index = 0_u64;
 
     'main: loop {
+        let now = Instant::now();
         let timeout = if needs_repaint {
-            Duration::ZERO
+            earliest_render_at.saturating_duration_since(now)
         } else {
-            next_repaint_at.saturating_duration_since(Instant::now())
+            next_repaint_at.saturating_duration_since(now)
         };
 
         if event::poll(timeout)? {
@@ -90,6 +97,9 @@ pub fn run_with(
             }
             let response = state.on_event(&evt);
             needs_repaint |= response.repaint;
+            if is_interaction_event(&evt) {
+                last_interaction_at = Some(Instant::now());
+            }
             debug_log::log(format!(
                 "runner.event_response: repaint={} consumed={}",
                 response.repaint, response.consumed
@@ -104,6 +114,9 @@ pub fn run_with(
                 }
                 let response = state.on_event(&evt);
                 needs_repaint |= response.repaint;
+                if is_interaction_event(&evt) {
+                    last_interaction_at = Some(Instant::now());
+                }
                 debug_log::log(format!(
                     "runner.event_response.batch: repaint={} consumed={}",
                     response.repaint, response.consumed
@@ -111,7 +124,17 @@ pub fn run_with(
             }
         }
 
-        if !needs_repaint && Instant::now() < next_repaint_at {
+        let now = Instant::now();
+        if !needs_repaint {
+            if now < next_repaint_at {
+                continue;
+            }
+            needs_repaint = true;
+        }
+
+        // Backpressure: keep a minimum frame interval and merge input bursts
+        // into the freshest frame instead of rendering every queued repaint.
+        if now < earliest_render_at {
             continue;
         }
 
@@ -132,9 +155,18 @@ pub fn run_with(
             .get(&egui::ViewportId::ROOT)
             .map(|v| v.repaint_delay)
             .unwrap_or(Duration::ZERO);
+        let now = Instant::now();
+        let pacing_interval = adaptive_frame_interval(last_interaction_at, now);
+        let effective_repaint_delay = if repaint_delay.is_zero() {
+            pacing_interval
+        } else {
+            repaint_delay.max(pacing_interval)
+        };
         debug_log::log(format!(
-            "runner.repaint_delay_ms: {}",
-            repaint_delay.as_millis()
+            "runner.repaint_delay_ms: requested={} pacing={} effective={}",
+            repaint_delay.as_millis(),
+            pacing_interval.as_millis(),
+            effective_repaint_delay.as_millis()
         ));
 
         let (width, height) = state.screen_size_pixels();
@@ -157,8 +189,10 @@ pub fn run_with(
             break;
         }
 
-        next_repaint_at = Instant::now() + repaint_delay;
-        needs_repaint = repaint_delay.is_zero();
+        let now = Instant::now();
+        next_repaint_at = now + effective_repaint_delay;
+        earliest_render_at = now + pacing_interval;
+        needs_repaint = false;
     }
 
     presenter.clear(&mut stdout)?;
@@ -183,6 +217,21 @@ fn should_exit_event(event: &Event, exit_on_escape: bool) -> bool {
     }
 
     exit_on_escape && matches!(key.code, KeyCode::Esc)
+}
+
+fn adaptive_frame_interval(last_interaction_at: Option<Instant>, now: Instant) -> Duration {
+    if last_interaction_at
+        .map(|at| now.saturating_duration_since(at) <= INTERACTIVE_WINDOW)
+        .unwrap_or(false)
+    {
+        INTERACTIVE_FRAME_INTERVAL
+    } else {
+        IDLE_FRAME_INTERVAL
+    }
+}
+
+fn is_interaction_event(event: &Event) -> bool {
+    matches!(event, Event::Mouse(_) | Event::Key(_) | Event::Paste(_))
 }
 
 struct TerminalGuard;

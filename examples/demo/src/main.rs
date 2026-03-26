@@ -105,7 +105,7 @@ impl DemoApp {
 
         if self.clicks != previous_clicks {
             if self.autotest_log_clicks {
-                eprintln!("AUTOTEST_CLICK={}", self.clicks);
+                eprintln!("[[AUTOTEST_CLICK={}]]", self.clicks);
             }
             demo_log(format!("demo.clicks_changed: {}", self.clicks));
             if self.autotest_exit_on_click {
