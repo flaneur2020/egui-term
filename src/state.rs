@@ -121,7 +121,7 @@ impl State {
             }
             Event::FocusGained => {
                 self.raw_input.focused = true;
-                self.raw_input.events.push(EguiEvent::WindowFocused(true));
+                self.push_event(EguiEvent::WindowFocused(true));
                 debug_log::log("state.focus: gained");
                 EventResponse {
                     consumed: false,
@@ -130,7 +130,7 @@ impl State {
             }
             Event::FocusLost => {
                 self.raw_input.focused = false;
-                self.raw_input.events.push(EguiEvent::WindowFocused(false));
+                self.push_event(EguiEvent::WindowFocused(false));
                 debug_log::log("state.focus: lost");
                 EventResponse {
                     consumed: false,
@@ -140,7 +140,7 @@ impl State {
             Event::Mouse(mouse) => self.on_mouse(*mouse),
             Event::Key(key) => self.on_key(*key),
             Event::Paste(text) => {
-                self.raw_input.events.push(EguiEvent::Paste(text.clone()));
+                self.push_event(EguiEvent::Paste(text.clone()));
                 EventResponse {
                     consumed: self.egui_ctx.wants_keyboard_input(),
                     repaint: true,
@@ -170,7 +170,7 @@ impl State {
         let pos = self.pointer_pos_from_cell(mouse.column, mouse.row);
         self.pointer_pos = Some(pos);
 
-        self.raw_input.events.push(EguiEvent::PointerMoved(pos));
+        self.push_event(EguiEvent::PointerMoved(pos));
         debug_log::log(format!(
             "state.mouse: kind={:?} col={} row={} pos=({:.1},{:.1})",
             mouse.kind, mouse.column, mouse.row, pos.x, pos.y
@@ -179,7 +179,7 @@ impl State {
         match mouse.kind {
             MouseEventKind::Down(button) => {
                 if let Some(button) = translate_mouse_button(button) {
-                    self.raw_input.events.push(EguiEvent::PointerButton {
+                    self.push_event(EguiEvent::PointerButton {
                         pos,
                         button,
                         pressed: true,
@@ -190,7 +190,7 @@ impl State {
             }
             MouseEventKind::Up(button) => {
                 if let Some(button) = translate_mouse_button(button) {
-                    self.raw_input.events.push(EguiEvent::PointerButton {
+                    self.push_event(EguiEvent::PointerButton {
                         pos,
                         button,
                         pressed: false,
@@ -221,7 +221,7 @@ impl State {
     }
 
     fn push_scroll(&mut self, delta: Vec2) {
-        self.raw_input.events.push(EguiEvent::MouseWheel {
+        self.push_event(EguiEvent::MouseWheel {
             unit: MouseWheelUnit::Line,
             delta,
             modifiers: self.raw_input.modifiers,
@@ -245,13 +245,11 @@ impl State {
         if pressed && modifiers.command {
             if let KeyCode::Char(ch) = key_event.code {
                 match ch.to_ascii_lowercase() {
-                    'c' => self.raw_input.events.push(EguiEvent::Copy),
-                    'x' => self.raw_input.events.push(EguiEvent::Cut),
+                    'c' => self.push_event(EguiEvent::Copy),
+                    'x' => self.push_event(EguiEvent::Cut),
                     'v' => {
                         if !self.clipboard.is_empty() {
-                            self.raw_input
-                                .events
-                                .push(EguiEvent::Paste(self.clipboard.clone()));
+                            self.push_event(EguiEvent::Paste(self.clipboard.clone()));
                         }
                     }
                     _ => {}
@@ -260,7 +258,7 @@ impl State {
         }
 
         if let Some(key) = translate_key_code(key_event.code) {
-            self.raw_input.events.push(EguiEvent::Key {
+            self.push_event(EguiEvent::Key {
                 key,
                 physical_key: None,
                 pressed,
@@ -276,7 +274,7 @@ impl State {
         if pressed && !modifiers.ctrl && !modifiers.alt {
             if let Some(text) = translate_text(key_event.code) {
                 if !text.is_empty() {
-                    self.raw_input.events.push(EguiEvent::Text(text));
+                    self.push_event(EguiEvent::Text(text));
                 }
             }
         }
@@ -310,6 +308,18 @@ impl State {
             ((column as f32 + 0.5) * self.options.cell_width_px) / self.options.pixels_per_point;
         let y = ((row as f32 + 0.5) * self.options.cell_height_px) / self.options.pixels_per_point;
         Pos2::new(x, y)
+    }
+
+    fn push_event(&mut self, event: EguiEvent) {
+        if let EguiEvent::PointerMoved(pos) = event {
+            if let Some(EguiEvent::PointerMoved(last_pos)) = self.raw_input.events.last_mut() {
+                *last_pos = pos;
+                return;
+            }
+            self.raw_input.events.push(EguiEvent::PointerMoved(pos));
+            return;
+        }
+        self.raw_input.events.push(event);
     }
 }
 
@@ -438,5 +448,66 @@ fn key_from_char(ch: char) -> Option<Key> {
         ';' => Some(Semicolon),
         '\'' => Some(Quote),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn coalesces_consecutive_pointer_moved_events() {
+        let ctx = egui::Context::default();
+        let mut state = State::new(ctx, 80, 24, StateOptions::default());
+
+        for col in [3_u16, 4, 5, 6] {
+            state.on_event(&Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: col,
+                row: 3,
+                modifiers: KeyModifiers::empty(),
+            }));
+        }
+
+        let moved = state
+            .egui_input()
+            .events
+            .iter()
+            .filter(|event| matches!(event, EguiEvent::PointerMoved(_)))
+            .count();
+        assert_eq!(moved, 1);
+    }
+
+    #[test]
+    fn keeps_pointer_button_events_when_coalescing_moves() {
+        let ctx = egui::Context::default();
+        let mut state = State::new(ctx, 80, 24, StateOptions::default());
+
+        state.on_event(&Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 6,
+            row: 3,
+            modifiers: KeyModifiers::empty(),
+        }));
+        state.on_event(&Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 6,
+            row: 3,
+            modifiers: KeyModifiers::empty(),
+        }));
+        state.on_event(&Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 6,
+            row: 3,
+            modifiers: KeyModifiers::empty(),
+        }));
+
+        let buttons = state
+            .egui_input()
+            .events
+            .iter()
+            .filter(|event| matches!(event, EguiEvent::PointerButton { .. }))
+            .count();
+        assert_eq!(buttons, 2);
     }
 }
