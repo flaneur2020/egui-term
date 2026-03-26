@@ -12,7 +12,7 @@ use crossterm::{
     terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 
-use crate::{kitty, OffscreenRenderer, Result, State, StateOptions};
+use crate::{debug_log, kitty, OffscreenRenderer, Result, State, StateOptions};
 
 #[derive(Clone, Copy, Debug)]
 pub struct RunOptions {
@@ -56,6 +56,14 @@ pub fn run_with(
         cols = 80;
         rows = 24;
     }
+    debug_log::log(format!(
+        "runner.start: cols={} rows={} ppp={} cell={}x{}",
+        cols,
+        rows,
+        options.state.pixels_per_point,
+        options.state.cell_width_px,
+        options.state.cell_height_px
+    ));
 
     let ctx = egui::Context::default();
     let mut state = State::new(ctx.clone(), cols, rows, options.state);
@@ -64,6 +72,7 @@ pub fn run_with(
 
     let mut needs_repaint = true;
     let mut next_repaint_at = Instant::now();
+    let mut frame_index = 0_u64;
 
     'main: loop {
         let timeout = if needs_repaint {
@@ -74,17 +83,31 @@ pub fn run_with(
 
         if event::poll(timeout)? {
             let evt = event::read()?;
+            debug_log::log(format!("runner.event: {:?}", evt));
             if should_exit_event(&evt, options.exit_on_escape) {
+                debug_log::log("runner.exit: by key");
                 break;
             }
-            needs_repaint |= state.on_event(&evt).repaint;
+            let response = state.on_event(&evt);
+            needs_repaint |= response.repaint;
+            debug_log::log(format!(
+                "runner.event_response: repaint={} consumed={}",
+                response.repaint, response.consumed
+            ));
 
             while event::poll(Duration::ZERO)? {
                 let evt = event::read()?;
+                debug_log::log(format!("runner.event.batch: {:?}", evt));
                 if should_exit_event(&evt, options.exit_on_escape) {
+                    debug_log::log("runner.exit: by key(batch)");
                     break 'main;
                 }
-                needs_repaint |= state.on_event(&evt).repaint;
+                let response = state.on_event(&evt);
+                needs_repaint |= response.repaint;
+                debug_log::log(format!(
+                    "runner.event_response.batch: repaint={} consumed={}",
+                    response.repaint, response.consumed
+                ));
             }
         }
 
@@ -95,18 +118,34 @@ pub fn run_with(
         let mut frame = Frame::default();
         let input = state.take_egui_input();
         let output = ctx.run(input, |ctx| app(ctx, &mut frame));
+        frame_index = frame_index.saturating_add(1);
+        debug_log::log(format!(
+            "runner.frame: idx={} shapes={} textures_set={} textures_free={}",
+            frame_index,
+            output.shapes.len(),
+            output.textures_delta.set.len(),
+            output.textures_delta.free.len()
+        ));
 
         let repaint_delay = output
             .viewport_output
             .get(&egui::ViewportId::ROOT)
             .map(|v| v.repaint_delay)
             .unwrap_or(Duration::ZERO);
+        debug_log::log(format!(
+            "runner.repaint_delay_ms: {}",
+            repaint_delay.as_millis()
+        ));
 
         let (width, height) = state.screen_size_pixels();
         let (screen_cols, screen_rows) = state.screen_size_cells();
         if width > 0 && height > 0 {
             let frame_rgba =
                 renderer.render(&ctx, &output, width, height, state.pixels_per_point())?;
+            debug_log::log(format!(
+                "runner.rendered: {}x{} cells={}x{}",
+                width, height, screen_cols, screen_rows
+            ));
             presenter.present(&mut stdout, &frame_rgba, screen_cols, screen_rows)?;
             stdout.flush()?;
         }
@@ -114,6 +153,7 @@ pub fn run_with(
         state.handle_platform_output(output.platform_output);
 
         if frame.should_close {
+            debug_log::log("runner.exit: frame.close");
             break;
         }
 
@@ -123,6 +163,7 @@ pub fn run_with(
 
     presenter.clear(&mut stdout)?;
     stdout.flush()?;
+    debug_log::log("runner.done");
 
     Ok(())
 }

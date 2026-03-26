@@ -2,6 +2,8 @@ use std::io::Write;
 
 use base64::Engine as _;
 
+use crate::debug_log;
+
 const KITTY_CHUNK_SIZE: usize = 4096;
 const DIRTY_RECT_FULL_REPAINT_THRESHOLD: f32 = 0.45;
 
@@ -48,6 +50,10 @@ impl Default for KittyPresenter {
         let disable_dirty_rect = std::env::var("EGUI_TERM_DISABLE_DIRTY_RECT")
             .map(|value| value == "1")
             .unwrap_or(false);
+        debug_log::log(format!(
+            "kitty.presenter.init: disable_dirty_rect={}",
+            disable_dirty_rect
+        ));
         Self {
             image_ids: [1, 2],
             active: None,
@@ -67,6 +73,7 @@ impl KittyPresenter {
         rows: u16,
     ) -> std::io::Result<()> {
         if self.disable_dirty_rect {
+            debug_log::log("kitty.present: force full repaint (dirty disabled)");
             return self.full_repaint(writer, frame, cols, rows);
         }
 
@@ -78,9 +85,18 @@ impl KittyPresenter {
                 if let Some(dirty) = dirty_rect(previous, frame) {
                     let total_pixels = frame.width as u64 * frame.height as u64;
                     let dirty_ratio = dirty.pixel_count() as f32 / total_pixels.max(1) as f32;
+                    debug_log::log(format!(
+                        "kitty.present: dirty x={} y={} w={} h={} ratio={:.4}",
+                        dirty.x, dirty.y, dirty.width, dirty.height, dirty_ratio
+                    ));
 
                     if dirty_ratio <= DIRTY_RECT_FULL_REPAINT_THRESHOLD {
                         let patch = crop_rgba(frame, dirty);
+                        debug_log::log(format!(
+                            "kitty.present: patch image_id={} bytes={}",
+                            self.image_ids[active_index],
+                            patch.len()
+                        ));
                         transmit_frame_patch(writer, self.image_ids[active_index], dirty, &patch)?;
                         // Kitty applies animation frame updates after selecting the target frame.
                         write!(
@@ -93,15 +109,18 @@ impl KittyPresenter {
                     }
                 } else {
                     // Nothing changed.
+                    debug_log::log("kitty.present: no pixel diff");
                     return Ok(());
                 }
             }
         }
 
+        debug_log::log("kitty.present: fallback full repaint");
         self.full_repaint(writer, frame, cols, rows)
     }
 
     pub(crate) fn clear<W: Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        debug_log::log("kitty.clear");
         for image_id in self.image_ids {
             write!(writer, "\x1b_Ga=d,d=I,i={}\x1b\\", image_id)?;
         }
@@ -122,6 +141,10 @@ impl KittyPresenter {
         let old_id = self.active.map(|index| self.image_ids[index]);
 
         self.z_index = self.z_index.wrapping_add(1);
+        debug_log::log(format!(
+            "kitty.full_repaint: next_id={} old_id={:?} z={}",
+            next_id, old_id, self.z_index
+        ));
 
         writer.write_all(b"\x1b[H")?;
         transmit_full_image(writer, frame, next_id, cols, rows, self.z_index)?;

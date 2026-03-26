@@ -8,6 +8,8 @@ use egui::{
     ViewportId,
 };
 
+use crate::debug_log;
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct EventResponse {
     pub consumed: bool,
@@ -105,9 +107,13 @@ impl State {
     }
 
     pub fn on_event(&mut self, event: &Event) -> EventResponse {
+        if debug_log::enabled() {
+            debug_log::log(format!("state.on_event: {:?}", event));
+        }
         match event {
             Event::Resize(cols, rows) => {
                 self.resize(*cols, *rows);
+                debug_log::log(format!("state.resize: {}x{}", cols, rows));
                 EventResponse {
                     consumed: false,
                     repaint: true,
@@ -116,6 +122,7 @@ impl State {
             Event::FocusGained => {
                 self.raw_input.focused = true;
                 self.raw_input.events.push(EguiEvent::WindowFocused(true));
+                debug_log::log("state.focus: gained");
                 EventResponse {
                     consumed: false,
                     repaint: true,
@@ -124,6 +131,7 @@ impl State {
             Event::FocusLost => {
                 self.raw_input.focused = false;
                 self.raw_input.events.push(EguiEvent::WindowFocused(false));
+                debug_log::log("state.focus: lost");
                 EventResponse {
                     consumed: false,
                     repaint: true,
@@ -145,6 +153,10 @@ impl State {
         for command in output.commands {
             match command {
                 egui::OutputCommand::CopyText(text) => {
+                    debug_log::log(format!(
+                        "state.platform_output.copy_text: len={}",
+                        text.len()
+                    ));
                     self.clipboard = text;
                 }
                 egui::OutputCommand::CopyImage(_) => {}
@@ -159,6 +171,10 @@ impl State {
         self.pointer_pos = Some(pos);
 
         self.raw_input.events.push(EguiEvent::PointerMoved(pos));
+        debug_log::log(format!(
+            "state.mouse: kind={:?} col={} row={} pos=({:.1},{:.1})",
+            mouse.kind, mouse.column, mouse.row, pos.x, pos.y
+        ));
 
         match mouse.kind {
             MouseEventKind::Down(button) => {
@@ -169,6 +185,7 @@ impl State {
                         pressed: true,
                         modifiers: self.raw_input.modifiers,
                     });
+                    debug_log::log(format!("state.mouse_button: down {:?}", button));
                 }
             }
             MouseEventKind::Up(button) => {
@@ -179,6 +196,7 @@ impl State {
                         pressed: false,
                         modifiers: self.raw_input.modifiers,
                     });
+                    debug_log::log(format!("state.mouse_button: up {:?}", button));
                 }
             }
             MouseEventKind::Drag(_) | MouseEventKind::Moved => {}
@@ -213,6 +231,10 @@ impl State {
     fn on_key(&mut self, key_event: KeyEvent) -> EventResponse {
         let modifiers = key_modifiers(key_event.modifiers);
         self.raw_input.modifiers = modifiers;
+        debug_log::log(format!(
+            "state.key: code={:?} kind={:?} mods={:?}",
+            key_event.code, key_event.kind, key_event.modifiers
+        ));
 
         let (pressed, repeat) = match key_event.kind {
             KeyEventKind::Press => (true, false),
@@ -245,6 +267,10 @@ impl State {
                 repeat,
                 modifiers,
             });
+            debug_log::log(format!(
+                "state.egui_key: {:?} pressed={} repeat={}",
+                key, pressed, repeat
+            ));
         }
 
         if pressed && !modifiers.ctrl && !modifiers.alt {

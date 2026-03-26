@@ -3,6 +3,7 @@
 //! - rendering with `egui_wgpu` to an offscreen RGBA image
 //! - presenting frames through the kitty graphics protocol
 
+mod debug_log;
 mod kitty;
 mod renderer;
 mod runner;
