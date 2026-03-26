@@ -278,8 +278,11 @@ impl State {
     }
 
     fn pointer_pos_from_cell(&self, column: u16, row: u16) -> Pos2 {
-        let x = (column as f32 * self.options.cell_width_px) / self.options.pixels_per_point;
-        let y = (row as f32 * self.options.cell_height_px) / self.options.pixels_per_point;
+        // Terminal mouse events are cell-addressed. Use the center of the cell
+        // as the pointer position to avoid systematic misses on widget edges.
+        let x =
+            ((column as f32 + 0.5) * self.options.cell_width_px) / self.options.pixels_per_point;
+        let y = ((row as f32 + 0.5) * self.options.cell_height_px) / self.options.pixels_per_point;
         Pos2::new(x, y)
     }
 }
